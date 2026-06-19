@@ -1,23 +1,28 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { toast } from 'sonner';
 import {
   Table,
   TableBody,
-  TableCell,
   TableHead,
   TableHeader,
   TableRow,
+  TableCell,
 } from '@/components/ui/table';
-import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
-import { getSymbolDisplayName } from '@/lib/active-symbols-display-names';
+import { OpenPositionRow, ClosedPositionRow } from './positions-table-rows';
 import { OpenPositionCard } from './open-position-card';
 import { ClosedPositionCard } from './closed-position-card';
 import type { OpenPosition } from '@/hooks/use-open-positions';
 import type { ClosedPosition } from '@/hooks/use-closed-positions';
+
+export enum PositionFilterType {
+  Open = 'open',
+  Closed = 'closed',
+  All = 'all',
+}
 
 export type PositionFilter = 'open' | 'closed' | 'all';
 
@@ -40,15 +45,6 @@ const VALUE_COL_HEADER: Record<PositionFilter, string> = {
   all: 'Value',
 };
 
-function formatContractType(
-  contractType: string,
-  labels: Record<string, string>,
-  barrier?: string
-): string {
-  const label = labels[contractType] ?? contractType;
-  return barrier !== undefined ? `${label} (${barrier})` : label;
-}
-
 export function PositionsTable({
   openPositions,
   closedPositions,
@@ -61,6 +57,7 @@ export function PositionsTable({
 }: PositionsTableProps) {
   const [filter, setFilter] = useState<PositionFilter>('open');
 
+  // Show error toast when sell fails
   useEffect(() => {
     if (sellError) {
       toast.error('Sell Failed', { description: sellError });
@@ -68,30 +65,51 @@ export function PositionsTable({
     }
   }, [sellError, onClearSellError]);
 
-  const totalCount = openPositions.length + closedPositions.length;
+  // Memoize filtered positions to avoid unnecessary recalculations
+  const visibleOpen = useMemo(
+    () => (filter === 'open' || filter === 'all' ? openPositions : []),
+    [filter, openPositions]
+  );
 
-  const visibleOpen = filter === 'open' || filter === 'all' ? openPositions : [];
-  const visibleClosed = filter === 'closed' || filter === 'all' ? closedPositions : [];
+  const visibleClosed = useMemo(
+    () => (filter === 'closed' || filter === 'all' ? closedPositions : []),
+    [filter, closedPositions]
+  );
+
+  const totalCount = openPositions.length + closedPositions.length;
+  const hasPositions = visibleOpen.length > 0 || visibleClosed.length > 0;
 
   return (
     <div className={cn('mt-6', className)}>
-      {/* Header */}
+      {/* Header with title and filter */}
       <div className="grid grid-cols-3 items-center mb-3">
         <div />
         <h2 className="text-sm font-semibold text-center">Report</h2>
-        <Select value={filter} onValueChange={(value) => setFilter(value as PositionFilter)}>
-          <SelectTrigger className="w-28 ml-auto">
+        <Select 
+          value={filter} 
+          onValueChange={(value) => setFilter(value as PositionFilter)}
+        >
+          <SelectTrigger 
+            className="w-28 ml-auto"
+            aria-label="Filter positions by status"
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="open">Open ({openPositions.length})</SelectItem>
-            <SelectItem value="closed">Closed ({closedPositions.length})</SelectItem>
-            <SelectItem value="all">All ({totalCount})</SelectItem>
+            <SelectItem value={PositionFilterType.Open}>
+              Open ({openPositions.length})
+            </SelectItem>
+            <SelectItem value={PositionFilterType.Closed}>
+              Closed ({closedPositions.length})
+            </SelectItem>
+            <SelectItem value={PositionFilterType.All}>
+              All ({totalCount})
+            </SelectItem>
           </SelectContent>
         </Select>
       </div>
 
-      {/* Desktop: table */}
+      {/* Desktop: Table View */}
       <div className="hidden lg:block rounded-lg border border-border overflow-hidden">
         <Table>
           <TableHeader>
@@ -121,9 +139,12 @@ export function PositionsTable({
                 contractTypeLabels={contractTypeLabels}
               />
             ))}
-            {visibleOpen.length === 0 && visibleClosed.length === 0 && (
+            {!hasPositions && (
               <TableRow>
-                <TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-8">
+                <TableCell 
+                  colSpan={6} 
+                  className="text-center text-sm text-muted-foreground py-8"
+                >
                   No positions
                 </TableCell>
               </TableRow>
@@ -132,7 +153,7 @@ export function PositionsTable({
         </Table>
       </div>
 
-      {/* Mobile: cards */}
+      {/* Mobile: Card View */}
       <div className="lg:hidden flex flex-col gap-3">
         {visibleOpen.map((pos) => (
           <OpenPositionCard
@@ -150,108 +171,12 @@ export function PositionsTable({
             contractTypeLabels={contractTypeLabels}
           />
         ))}
-        {visibleOpen.length === 0 && visibleClosed.length === 0 && (
-          <p className="text-center text-sm text-muted-foreground py-8">No positions</p>
+        {!hasPositions && (
+          <p className="text-center text-sm text-muted-foreground py-8">
+            No positions
+          </p>
         )}
       </div>
     </div>
-  );
-}
-
-// ─── Desktop table rows ────────────────────────────────────────────────────
-
-function OpenPositionRow({
-  pos,
-  isSelling,
-  onSell,
-  contractTypeLabels,
-}: {
-  pos: OpenPosition;
-  isSelling: boolean;
-  onSell: (contractId: number, bidPrice: string) => Promise<void>;
-  contractTypeLabels: Record<string, string>;
-}) {
-  const profit = parseFloat(pos.profit);
-  const isProfit = profit >= 0;
-
-  return (
-    <TableRow>
-      <TableCell className="font-medium">
-        {formatContractType(pos.contract_type, contractTypeLabels, pos.barrier)}
-      </TableCell>
-      <TableCell className="text-muted-foreground">{getSymbolDisplayName(pos.underlying_symbol)}</TableCell>
-      <TableCell className="text-right">
-        {parseFloat(pos.buy_price).toFixed(2)} {pos.currency}
-      </TableCell>
-      <TableCell className="text-right">
-        {parseFloat(pos.bid_price).toFixed(2)} {pos.currency}
-      </TableCell>
-      <ProfitCell profit={profit} profitPct={pos.profit_percentage} currency={pos.currency} isProfit={isProfit} />
-      <TableCell className="text-right">
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={isSelling || pos.is_valid_to_sell !== 1}
-          onClick={() => onSell(pos.contract_id, pos.bid_price)}
-        >
-          {isSelling ? 'Selling...' : 'Sell'}
-        </Button>
-      </TableCell>
-    </TableRow>
-  );
-}
-
-function ClosedPositionRow({
-  pos,
-  contractTypeLabels,
-}: {
-  pos: ClosedPosition;
-  contractTypeLabels: Record<string, string>;
-}) {
-  const profit = pos.sell_price - pos.buy_price;
-  const profitPct = (profit / pos.buy_price) * 100;
-  const isProfit = profit >= 0;
-
-  return (
-    <TableRow>
-      <TableCell className="font-medium">
-        {formatContractType(pos.contract_type, contractTypeLabels)}
-      </TableCell>
-      <TableCell className="text-muted-foreground">{getSymbolDisplayName(pos.underlying_symbol)}</TableCell>
-      <TableCell className="text-right">
-        {pos.buy_price.toFixed(2)}
-      </TableCell>
-      <TableCell className="text-right">
-        {pos.sell_price.toFixed(2)}
-      </TableCell>
-      <ProfitCell profit={profit} profitPct={profitPct} currency="" isProfit={isProfit} />
-      <TableCell />
-    </TableRow>
-  );
-}
-
-function ProfitCell({
-  profit,
-  profitPct,
-  currency,
-  isProfit,
-}: {
-  profit: number;
-  profitPct: number;
-  currency: string;
-  isProfit: boolean;
-}) {
-  return (
-    <TableCell
-      className={cn(
-        'text-right font-semibold',
-        isProfit ? 'text-green-600' : 'text-destructive'
-      )}
-    >
-      {isProfit ? '+' : ''}{profit.toFixed(2)}{currency ? ` ${currency}` : ''}
-      <span className="text-xs font-normal ml-1 opacity-70">
-        ({isProfit ? '+' : ''}{profitPct.toFixed(1)}%)
-      </span>
-    </TableCell>
   );
 }
